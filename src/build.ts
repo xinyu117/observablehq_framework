@@ -308,28 +308,31 @@ export async function build(
     await effects.writeFile(alias, contents);
   }
 
-  // Copy over global assets (e.g., minisearch.json, DuckDB's WebAssembly).
-  // Anything in _observablehq also needs a content hash, but anything in _npm
-  // or _node does not (because they are already necessarily immutable). We're
-  // skipping DuckDB's extensions because they were previously copied above.
+  // 第七阶段：复制全局资源（如minisearch.json、DuckDB的WebAssembly等）
+  // 全局资源分为两类处理：
+  // 1. /_observablehq/ 路径的文件：需要计算内容哈希并生成别名（因为内容可能变化）
+  // 2. /_npm/ 或 /_node/ 路径的文件：直接复制（因为它们本身就是不可变的）
+  // 跳过JavaScript文件和DuckDB扩展（已在前面阶段处理）
   for (const path of globalImports) {
     if (path.endsWith(".js") || path.startsWith("/_duckdb/")) continue;
     const sourcePath = join(cacheRoot, path);
     effects.output.write(`${faint("build")} ${path} ${faint("→")} `);
     if (path.startsWith("/_observablehq/")) {
+      // Observable框架内部资源需要内容哈希处理
       const contents = await readFile(sourcePath, "utf-8");
       const hash = createHash("sha256").update(contents).digest("hex").slice(0, 8);
       const alias = applyHash(path, hash);
       aliases.set(path, alias);
       await effects.writeFile(alias, contents);
     } else {
+      // npm/node模块资源直接复制（版本已锁定，内容不变）
       await effects.copyFile(sourcePath, path);
     }
   }
 
-  // Compute the hashes for global modules. By computing the hash on the file in
-  // the cache root, this takes into consideration the resolved exact versions
-  // of npm and node imports for transitive dependencies.
+  // 第八阶段：计算全局模块哈希
+  // 为所有全局JavaScript模块计算哈希值，基于缓存根目录中的文件
+  // 这考虑了npm和node导入的传递依赖的确切版本，确保版本变化时哈希也变化
   for (const path of globalImports) {
     if (!path.endsWith(".js")) continue;
     const hash = getModuleHash(cacheRoot, path).slice(0, 8);
@@ -338,22 +341,22 @@ export async function build(
     aliases.set(path, alias);
   }
 
-  // Copy over global imports, applying aliases. Note that unused standard
-  // library imports (say parquet-wasm if you never use FileAttachment.parquet)
-  // may not be present in aliases and not included in the output build; these
-  // imports therefore will not have associated hashes.
+  // 第九阶段：复制全局导入并应用别名
+  // 复制全局JavaScript模块到输出目录，同时重写模块中的npm导入路径
+  // 注意：未使用的标准库导入（如从未使用FileAttachment.parquet时的parquet-wasm）
+  // 可能不会出现在aliases中，因此不会包含在输出构建中
   for (const path of globalImports) {
     if (!path.endsWith(".js")) continue;
     const sourcePath = join(cacheRoot, path);
     effects.output.write(`${faint("build")} ${path} ${faint("→")} `);
+    // 定义导入解析函数：路径导入使用相对路径和别名，其他导入保持不变
     const resolveImport = (i: string) => isPathImport(i) ? relativePath(path, aliases.get((i = resolvePath(path, i))) ?? i) : i; // prettier-ignore
     await effects.writeFile(aliases.get(path)!, rewriteNpmImports(await readFile(sourcePath, "utf-8"), resolveImport));
   }
 
-  // Copy over imported local modules, overriding import resolution so that
-  // module hash is incorporated into the file name rather than in the query
-  // string. Note that this hash is not of the content of the module itself, but
-  // of the transitive closure of the module and its imports and files.
+  // 第十阶段：复制本地模块并重写导入解析
+  // 处理项目本地的JavaScript模块，将模块哈希合并到文件名而不是查询字符串中
+  // 注意：这里的哈希不是模块内容本身的哈希，而是模块及其导入和文件的传递闭包的哈希
   const resolveLocalImport = async (path: string): Promise<string> => {
     const hash = (await loaders.getLocalModuleHash(path)).slice(0, 8);
     return applyHash(join("/_import", path), hash);
@@ -367,22 +370,28 @@ export async function build(
     effects.output.write(`${faint("copy")} ${sourcePath} ${faint("→")} `);
     const resolveImport = loaders.getModuleResolver(path);
     const input = await readJavaScript(sourcePath);
+    // 转译模块并重写所有引用，应用正确的文件路径和导入解析
     const contents = await transpileModule(input, {
       root,
       path,
       params: module.params,
+      // 文件引用解析：使用别名或原始解析路径
       resolveFile(name) {
         const resolution = loaders.resolveFilePath(resolvePath(path, name));
         return aliases.get(resolution) ?? resolution;
       },
+      // 文件信息解析：获取输出文件的元信息
       resolveFileInfo(name) {
         return loaders.getOutputInfo(resolvePath(path, name));
       },
+      // 导入解析：区分本地路径导入和外部导入
       async resolveImport(specifier) {
         let resolution: string;
         if (isPathImport(specifier)) {
+          // 本地路径导入：使用本地导入解析器
           resolution = await resolveLocalImport(resolvePath(path, specifier));
         } else {
+          // 外部导入：使用模块解析器
           resolution = await resolveImport(specifier);
           if (isPathImport(resolution)) {
             resolution = resolvePath(importPath, resolution);
@@ -397,28 +406,34 @@ export async function build(
     await effects.writeFile(alias, contents);
   }
 
-  // Wrap the resolvers to apply content-hashed file names.
+  // 第十一阶段：包装解析器以应用内容哈希文件名
+  // 更新所有输出的解析器，使其返回带内容哈希的文件名，实现浏览器缓存优化
+  // 重写四种解析器方法，如果找不到别名则回退到原始说明符
   for (const [path, output] of outputs) {
     const {resolvers} = output;
     outputs.set(path, {
       ...output,
       resolvers: {
         ...resolvers,
+        // 文件解析：查找文件别名，实现缓存优化
         resolveFile(specifier) {
           const r = resolvers.resolveFile(specifier);
           const a = aliases.get(resolvePath(path, r));
           return a ? relativePath(path, a) : specifier; // fallback to specifier if enoent
         },
+        // 样式表解析：处理CSS文件的别名
         resolveStylesheet(specifier) {
           const r = resolvers.resolveStylesheet(specifier);
           const a = aliases.get(resolvePath(path, r));
           return a ? relativePath(path, a) : isPathImport(specifier) ? specifier : r; // fallback to specifier if enoent
         },
+        // 导入解析：处理JavaScript模块的别名
         resolveImport(specifier) {
           const r = resolvers.resolveImport(specifier);
           const a = aliases.get(resolvePath(path, r));
           return a ? relativePath(path, a) : isPathImport(specifier) ? specifier : r; // fallback to specifier if enoent
         },
+        // 脚本解析：处理内联脚本的别名
         resolveScript(specifier) {
           const r = resolvers.resolveScript(specifier);
           const a = aliases.get(resolvePath(path, r));
@@ -428,38 +443,48 @@ export async function build(
     });
   }
 
-  // Render pages!
+  // 第十二阶段：渲染页面和模块！
+  // 遍历所有输出，将Markdown页面渲染为HTML，将JavaScript模块转换为最终源代码
   for (const [path, output] of outputs) {
     effects.output.write(`${faint("render")} ${path} ${faint("→")} `);
     if (output.type === "page") {
+      // 页面类型：使用renderPage生成完整的HTML文档
       const {page, resolvers} = output;
       const html = await renderPage(page, {...config, path, resolvers});
       await effects.writeFile(`${path}.html`, html);
       addToManifest("pages", path, page);
     } else {
+      // 模块类型：使用renderModule生成JavaScript源代码
       const {resolvers} = output;
       const source = await renderModule(root, path, resolvers);
       await effects.writeFile(path, source);
     }
   }
 
-  // Write the build manifest.
+  // 第十三阶段：写入构建清单和统计信息
+  // 生成包含所有构建结果的清单文件，并显示详细的大小统计
   await effects.writeBuildManifest(buildManifest);
-  // Log page sizes.
+  
+  // 显示页面大小统计：包括页面本身、导入文件和资源文件的大小
   const columnWidth = 12;
   effects.logger.log("");
   for (const [indent, name, description, node] of tree(outputs)) {
     if (node.children) {
+      // 目录节点：显示目录结构和列标题
       effects.logger.log(
         `${faint(indent)}${name}${faint(description)} ${
           node.depth ? "" : ["Page", "Imports", "Files"].map((name) => name.padStart(columnWidth)).join(" ")
         }`
       );
     } else {
+      // 文件节点：计算并显示各类资源的大小
       const [path, {type, resolvers}] = node.data!;
       const resolveOutput = (name: string) => join(config.output, resolvePath(path, name));
+      // 页面文件大小
       const pageSize = (await stat(join(config.output, type === "page" ? `${path}.html` : path))).size;
+      // 导入文件总大小
       const importSize = await accumulateSize(resolvers.staticImports, resolvers.resolveImport, resolveOutput);
+      // 资源文件总大小（包括普通文件、资产文件和样式表）
       const fileSize =
         (await accumulateSize(resolvers.files, resolvers.resolveFile, resolveOutput)) +
         (await accumulateSize(resolvers.assets, resolvers.resolveFile, resolveOutput)) +
@@ -473,15 +498,20 @@ export async function build(
   }
   effects.logger.log("");
 
-  // Check links. TODO Have this break the build, and move this check earlier?
+  // 第十四阶段：链接验证和质量检查
+  // 验证所有页面中的链接有效性，确保网站质量
+  // TODO: 考虑让链接验证失败时中断构建，并将此检查移到更早的阶段
   const [validLinks, brokenLinks] = validateLinks(outputs);
   if (brokenLinks.length) {
+    // 发现破损链接：显示警告和详细信息
     effects.logger.warn(`${yellow("Warning: ")}${brokenLinks.length} broken link${brokenLinks.length === 1 ? "" : "s"} (${validLinks.length + brokenLinks.length} validated)`); // prettier-ignore
     for (const [path, link] of brokenLinks) effects.logger.log(`${faint("↳")} ${path} ${faint("→")} ${red(link)}`);
   } else if (validLinks.length) {
+    // 所有链接有效：显示成功信息
     effects.logger.log(`${green(`${validLinks.length}`)} link${validLinks.length === 1 ? "" : "s"} validated`);
   }
 
+  // 记录构建完成的遥测数据
   Telemetry.record({event: "build", step: "finish", pageCount});
 }
 
