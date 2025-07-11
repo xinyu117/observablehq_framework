@@ -185,7 +185,7 @@ export async function getResolvers(page: MarkdownPage, config: ResolversConfig):
       files.add(f.name);
       if (f.method) fileMethods.add(f.method);
     }
-    // 处理导入语句
+    // 处理导入语句 suchao:在md文件中的JS代码块中的导入语句是在此被加入到localImports的
     for (const i of node.imports) {
       (i.type === "local" ? localImports : globalImports).add(i.name);
       if (i.method === "static") staticImports.add(i.name);
