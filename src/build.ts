@@ -174,8 +174,8 @@ export async function build(
       }
     }
     
-    // 处理静态文件
-    const file = loaders.find(path);
+    // 处理静态文件 //suchao:在这里会执行.md.js文件,FileAttachment("data/edits.csv") 引用的在后面执行
+    const file = loaders.find(path); 
     if (file) {
       effects.output.write(`${faint("copy")} ${join(root, path)} ${faint("→")} `);
       const sourcePath = join(root, await file.load({useStale: true}, effects));
@@ -191,7 +191,7 @@ export async function build(
       effects.logger.log(faint("(skipped)"));
       continue;
     }
-    const resolvers = await getResolvers(page, options);
+    const resolvers = await getResolvers(page, options); // suchao:此方法执行后NPM的包被COPY到cache目录(最终是调用npm.ts中的populateNpmCache)
     const elapsed = Math.floor(performance.now() - start);
     // 收集页面的依赖项
     for (const f of resolvers.assets) addFile(path, f);
@@ -240,7 +240,7 @@ export async function build(
     }
   }
 
-  // 第四阶段：生成客户端 JavaScript 包
+  // 第四阶段：生成客户端 JavaScript 包 suchao: 不仅仅是client.js，还有runtime.js等
   // 这些包最初生成到缓存中，因为我们需要重写任何 npm 和 node 导入为哈希版本
   for (const path of globalImports) {
     if (path.startsWith("/_observablehq/") && path.endsWith(".js")) {
@@ -257,7 +257,7 @@ export async function build(
     }
   }
 
-  // 第五阶段：复制样式表，累积哈希别名
+  // 第五阶段：复制样式表，累积哈希别名 suchao: 从此开始向dist中COPY文件
   for (const specifier of stylesheets) {
     if (specifier.startsWith("observablehq:")) {
       let contents: string;
@@ -294,8 +294,8 @@ export async function build(
     }
   }
 
-  // 第六阶段：复制引用的文件，累积哈希别名
-  for (const file of files) {
+  // 第六阶段：复制引用的文件，累积哈希别名 suchao:因为files中已经包含FileAttachment("data/edits.csv")，所以这里命令加载器会执行
+  for (const file of files) { //← files 集合来自 FileAttachment 引用
     effects.output.write(`${faint("copy")} ${join(root, file)} ${faint("→")} `);
     const path = join("/", file);
     const loader = loaders.find(path);
@@ -428,7 +428,7 @@ export async function build(
           return a ? relativePath(path, a) : isPathImport(specifier) ? specifier : r; // fallback to specifier if enoent
         },
         // 导入解析：处理JavaScript模块的别名
-        resolveImport(specifier) {
+        resolveImport(specifier) { //suchao: 此方法在render.ts中被调用,把正常的文件名，转换为带哈希的文件名
           const r = resolvers.resolveImport(specifier);
           const a = aliases.get(resolvePath(path, r));
           return a ? relativePath(path, a) : isPathImport(specifier) ? specifier : r; // fallback to specifier if enoent

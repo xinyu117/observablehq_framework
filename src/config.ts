@@ -304,7 +304,7 @@ export function normalizeConfig(spec: ConfigSpec = {}, defaultRoot?: string, wat
     sidebar: sidebar!, // see below
     pages: pages!, // see below
     pager,
-    async *paths() {
+    async *paths() {  // 只扫描页面文件，不扫描数据文件
       const visited = new Set<string>();
       function* visit(path: string): Generator<string> {
         if (!visited.has((path = normalizePagePath(path)))) {
