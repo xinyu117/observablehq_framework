@@ -304,7 +304,7 @@ export function normalizeConfig(spec: ConfigSpec = {}, defaultRoot?: string, wat
     sidebar: sidebar!, // see below
     pages: pages!, // see below
     pager,
-    async *paths() {  // 只扫描页面文件，不扫描数据文件
+    async *paths() {  
       const visited = new Set<string>();
       function* visit(path: string): Generator<string> {
         if (!visited.has((path = normalizePagePath(path)))) {
@@ -312,12 +312,15 @@ export function normalizeConfig(spec: ConfigSpec = {}, defaultRoot?: string, wat
           yield path;
         }
       }
+      // 只扫描页面文件(包含.md文件)，不扫描数据文件
       for (const path of this.loaders.findPagePaths()) {
         yield* visit(path);
       }
+      // suchao:配置文件中定义的页面，这里配置的文件会在sidebar中显示
       for (const path of getPagePaths(this)) {
         yield* visit(path);
       }
+      // suchao:动态路径，可以是固定格式多个，也可是函数返回多个；和文件按优先级匹配
       for await (const path of dynamicPaths()) {
         yield* visit(path);
       }

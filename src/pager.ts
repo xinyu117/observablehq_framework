@@ -43,6 +43,30 @@ export function findLink(path: string, config: Config): PageLink | undefined {
 /**
  * Walks the unique pages in the site so as to avoid creating cycles. Implicitly
  * adds a link at the beginning to the home page (/index).
+ * suchao: 以下是两个pages的例子，第一个是单个页面，第二个是分组页面
+ * pages: [
+    {name: "Getting ever more awesome", path: "/getting-awesome"},
+    {name: "Being totally awesome", path: "/being-awesome"},
+    {name: "Staying as awesome as ever", path: "/staying-awesome"}
+  ]
+ * pages: [
+    {
+      name: "Section 1",
+      path: "/s01/",
+      pages: [
+        {name: "Page 1", path: "/s01/page1"},
+        {name: "Page 2", path: "/s01/page2"}
+      ]
+    },
+    {
+      name: "Section 2",
+      open: false,
+      pages: [
+        {name: "Page 3", path: "/s02/page3"},
+        {name: "Page 4", path: "/s02/page4"}
+      ]
+    }
+  ]
  */
 function walk(config: Config): Iterable<Iterable<Page>> {
   const {pages, loaders, title = "Home"} = config;
