@@ -374,41 +374,109 @@ async function resolveNpmVersion(root: string, {name, range}: NpmSpecifier): Pro
   return promise;
 }
 
+/**
+ * 解析 NPM 导入 - 包依赖解析的核心协调函数
+ * 
+ * 这是 Observable Framework 包依赖解析机制的核心协调函数。它负责将用户的
+ * npm 导入说明符（如 "d3@^7.0.0" 或 "lodash/debounce"）转换为具体的缓存路径。
+ * 
+ * 主要功能：
+ * 1. **解析包说明符**: 分解包名、版本范围、子路径
+ * 2. **版本解析**: 调用 resolveNpmVersion 确定具体版本
+ * 3. **路径标准化**: 处理各种路径格式，生成统一的缓存路径
+ * 4. **特殊包处理**: 为某些包提供自定义的入口点
+ * 
+ * 这个函数是传递依赖下载的关键触发点 - 每次调用都可能启动新的包下载流程。
+ * 
+ * @param root 项目根目录
+ * @param specifier npm 包说明符，如 "d3@^7.0.0", "lodash/debounce", "react-dom/client"
+ * @returns 解析后的缓存路径，如 "/_npm/d3@7.8.5/_esm.js"
+ * 
+ * 示例转换：
+ * - "d3" → "/_npm/d3@7.8.5/_esm.js"
+ * - "lodash/debounce" → "/_npm/lodash@4.17.21/debounce._esm.js"
+ * - "react-dom/client" → "/_npm/react-dom@18.2.0/client"
+ * - "mermaid" → "/_npm/mermaid@10.6.1/dist/mermaid.esm.min.mjs/_esm.js"
+ */
 export async function resolveNpmImport(root: string, specifier: string): Promise<string> {
+  // 🔍 解析 npm 包说明符，提取包名、版本范围、子路径
   const {
     name,
+    // 🎯 特殊版本处理：某些包需要固定版本以确保兼容性
     range = name === "@duckdb/duckdb-wasm" ? DUCKDB_WASM_VERSION : undefined,
+    // 🛠️ 特殊路径处理：某些包需要自定义入口点以确保正确加载
     path = name === "mermaid"
-      ? "dist/mermaid.esm.min.mjs/+esm"
+      ? "dist/mermaid.esm.min.mjs/+esm"      // Mermaid 使用压缩的 ESM 版本
       : name === "echarts"
-      ? "dist/echarts.esm.min.js/+esm"
+      ? "dist/echarts.esm.min.js/+esm"       // ECharts 使用压缩的 ESM 版本
       : name === "jquery-ui"
-      ? "dist/jquery-ui.js/+esm"
+      ? "dist/jquery-ui.js/+esm"             // jQuery UI 使用 dist 版本
       : name === "deck.gl"
-      ? "dist.min.js/+esm"
+      ? "dist.min.js/+esm"                   // Deck.gl 使用压缩版本
       : name === "react-dom"
-      ? "client"
-      : "+esm"
+      ? "client"                             // React DOM 使用客户端版本
+      : "+esm"                               // 默认使用 ESM 版本
   } = parseNpmSpecifier(specifier);
+  
+  // 🔄 版本解析：这是传递依赖解析的关键步骤
+  // 如果这个版本还没有被解析过，会触发 npm registry 查询和包下载
   const version = await resolveNpmVersion(root, {name, range});
+  
+  // 🏗️ 构建标准化的缓存路径
+  // 所有 npm 包都缓存在 /_npm/${name}@${version}/ 目录下
   return `/_npm/${name}@${version}/${
-    extname(path) || // npm:foo/bar.js or npm:foo/bar.css
-    path === "" || // npm:foo/
-    path.endsWith("/") // npm:foo/bar/
-      ? path
-      : path === "+esm" // npm:foo/+esm
-      ? "_esm.js"
-      : path.replace(/(?:\/\+esm)?$/, "._esm.js") // npm:foo/bar or npm:foo/bar/+esm
+    // 📁 路径处理逻辑：根据不同情况生成正确的文件路径
+    extname(path) ||     // 如果已有扩展名：npm:foo/bar.js → bar.js
+    path === "" ||       // 如果是空路径：npm:foo/ → ""  
+    path.endsWith("/")   // 如果以 / 结尾：npm:foo/bar/ → bar/
+      ? path             // 直接使用原路径
+      : path === "+esm"  // 如果是 ESM 标记：npm:foo/+esm → _esm.js
+      ? "_esm.js"        
+      : path.replace(/(?:\/\+esm)?$/, "._esm.js") // 其他情况：npm:foo/bar → bar._esm.js
   }`;
 }
 
 /**
- * Resolves the direct dependencies of the specified npm path, such as
- * "/_npm/d3@7.8.5/_esm.js", returning the corresponding set of npm paths.
+ * 解析 NPM 包的直接依赖 - 传递依赖发现的核心函数
+ * 
+ * 这个函数是传递依赖解析流程中的关键环节。它负责分析已下载的 npm 包，
+ * 找出该包直接依赖的其他包，为后续的递归依赖解析提供输入。
+ * 
+ * 工作流程：
+ * 1. **确保包已下载**: 调用 populateNpmCache 确保目标包已经被下载到本地缓存
+ * 2. **解析包源码**: 分析包的 JavaScript 源码，找出所有导入语句
+ * 3. **返回依赖列表**: 返回该包直接依赖的所有包的引用信息
+ * 
+ * 这个函数的输出会被 resolvers.ts 中的传递依赖处理逻辑使用，
+ * 触发对每个依赖的递归 resolveNpmImport 调用。
+ * 
+ * @param root 项目根目录
+ * @param path npm 包的缓存路径，如 "/_npm/d3@7.8.5/_esm.js"
+ * @returns 该包的直接依赖列表，每个依赖包含名称、类型、方法等信息
+ * 
+ * 示例：
+ * 输入: "/_npm/d3@7.8.5/_esm.js"
+ * 输出: [
+ *   {name: "d3-array", type: "global", method: "static"},
+ *   {name: "d3-scale", type: "global", method: "static"},
+ *   {name: "d3-selection", type: "global", method: "static"},
+ *   // ... 更多 d3 的子模块依赖
+ * ]
+ * 
+ * 这些依赖会触发后续的递归下载：
+ * - resolveNpmImport(root, "d3-array@3.2.4")
+ * - resolveNpmImport(root, "d3-scale@4.0.2")  
+ * - resolveNpmImport(root, "d3-selection@3.0.0")
  */
 export async function resolveNpmImports(root: string, path: string): Promise<ImportReference[]> {
+  // 验证路径格式
   if (!path.startsWith("/_npm/")) throw new Error(`invalid npm path: ${path}`);
+  
+  // 🔄 确保目标包已下载：这会触发包的下载、依赖解析、路径重写等完整流程
   await populateNpmCache(root, path);
+  
+  // 🔍 解析包的源码，提取所有导入引用
+  // 这会分析包的实际 JavaScript 代码，找出它使用的所有依赖
   return parseImports(join(root, ".observablehq", "cache"), path);
 }
 
