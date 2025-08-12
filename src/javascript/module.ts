@@ -1,3 +1,34 @@
+/**
+ * JavaScript 模块分析和依赖解析
+ * 
+ * 这个模块是 Observable Framework 包依赖解析机制的核心组件。它负责：
+ * 
+ * ## 📦 包依赖解析流程概览
+ * 
+ * 1. **模块解析** (`getModuleInfo`): 
+ *    - 解析用户的 JavaScript 模块源码
+ *    - 识别所有导入语句：import、export、FileAttachment
+ *    - 分类导入类型：本地 vs 全局，静态 vs 动态
+ * 
+ * 2. **依赖分类**:
+ *    - `localStaticImports`: "./utils.js" - 本地文件的静态导入
+ *    - `localDynamicImports`: import("./utils.js") - 本地文件的动态导入
+ *    - `globalStaticImports`: "npm:d3" - 外部包的静态导入 ⭐ 触发包下载
+ *    - `globalDynamicImports`: import("npm:d3") - 外部包的动态导入
+ *    - `files`: FileAttachment("data.csv") - 数据文件引用
+ * 
+ * 3. **触发后续流程**:
+ *    - globalStaticImports 会触发 npm.ts 中的包下载流程
+ *    - 包下载会解析 package.json，递归下载传递依赖
+ *    - 最终构建完整的依赖图谱，支撑整个应用的运行
+ * 
+ * ## 🔄 与其他模块的协作
+ * - `src/npm.ts`: 处理 npm 包的下载和依赖解析
+ * - `src/resolvers.ts`: 协调整个依赖解析流程
+ * - `src/javascript/imports.ts`: 解析 JavaScript 导入语句
+ * - `src/javascript/files.ts`: 解析 FileAttachment 引用
+ */
+
 import type {Hash} from "node:crypto";
 import {createHash} from "node:crypto";
 import {accessSync, constants, readFileSync, statSync} from "node:fs";
@@ -119,13 +150,31 @@ export async function getLocalModuleHash(root: string, path: string, getHash?: (
 }
 
 /**
- * Returns the information for the module at the specified path within the
- * source root, or undefined if the module does not exist or has invalid syntax.
+ * 获取模块信息 - 包依赖解析的起始点
+ * 
+ * 这是 Observable Framework 包依赖解析机制的入口函数。当用户的 JavaScript 模块
+ * 包含 `import d3 from "npm:d3"` 这样的导入时，这个函数会：
+ * 
+ * 1. **解析模块源码**: 读取并解析 JavaScript 文件
+ * 2. **提取导入语句**: 找出所有的 import、export 和 FileAttachment 引用
+ * 3. **分类导入类型**: 区分本地导入和全局导入、静态导入和动态导入
+ * 4. **缓存解析结果**: 基于文件修改时间的智能缓存
+ * 
+ * 这个函数的输出会触发后续的包下载和依赖解析流程。
+ * 
+ * @param root 项目根目录
+ * @param path 模块文件路径
+ * @returns 模块信息对象，包含所有导入和文件引用的分类结果
  */
 export function getModuleInfo(root: string, path: string): ModuleInfo | undefined {
+  // 🔍 查找模块文件，支持参数化路径
   const module = findModule(root, path);
   if (!module) return; // TODO delete stale entry?
+  
+  // 构建完整的文件路径
   const key = join(root, module.path);
+  
+  // 📅 获取文件修改时间，用于缓存失效判断
   let mtimeMs: number;
   try {
     mtimeMs = Math.floor(statSync(key).mtimeMs);
@@ -133,8 +182,11 @@ export function getModuleInfo(root: string, path: string): ModuleInfo | undefine
     moduleInfoCache.delete(key); // delete stale entry
     return; // ignore missing file
   }
+  
+  // 💾 检查缓存：如果文件未修改，直接返回缓存结果
   let info = moduleInfoCache.get(key);
   if (!info || info.mtimeMs < mtimeMs) {
+    // 📄 文件已修改或首次解析，重新分析模块
     let source: string;
     let body: Program;
     try {
@@ -144,21 +196,29 @@ export function getModuleInfo(root: string, path: string): ModuleInfo | undefine
       moduleInfoCache.delete(key); // delete stale entry
       return; // ignore parse error
     }
+    
+    // 🔐 计算文件内容哈希，用于构建系统的缓存失效
     const hash = createHash("sha256").update(source).digest("hex");
-    const imports = findImports(body, path, source);
-    const files = findFiles(body, path, source);
-    const localStaticImports = new Set<string>();
-    const localDynamicImports = new Set<string>();
-    const globalStaticImports = new Set<string>();
-    const globalDynamicImports = new Set<string>();
+    
+    // 🔍 关键步骤：解析模块的导入和文件引用
+    const imports = findImports(body, path, source);  // 找出所有导入语句
+    const files = findFiles(body, path, source);      // 找出所有 FileAttachment 引用
+    // 📊 创建分类集合：将导入按类型和方法分类
+    const localStaticImports = new Set<string>();    // 本地静态导入：如 "./utils.js"
+    const localDynamicImports = new Set<string>();   // 本地动态导入：如 import("./utils.js")
+    const globalStaticImports = new Set<string>();   // 全局静态导入：如 "npm:d3"
+    const globalDynamicImports = new Set<string>();  // 全局动态导入：如 import("npm:d3")
+    
+    // 🔄 遍历所有导入，按类型分类
+    // 这是包依赖解析机制的关键分类步骤
     for (const i of imports) {
-      (i.type === "local"
-        ? i.method === "static"
-          ? localStaticImports
-          : localDynamicImports
-        : i.method === "static"
-        ? globalStaticImports
-        : globalDynamicImports
+      (i.type === "local"           // 本地导入（相对路径）
+        ? i.method === "static"     // 静态导入
+          ? localStaticImports      // → 本地静态导入集合
+          : localDynamicImports     // → 本地动态导入集合
+        : i.method === "static"     // 全局导入的静态方式
+        ? globalStaticImports       // → 全局静态导入集合（触发包下载）
+        : globalDynamicImports      // → 全局动态导入集合
       ).add(i.name);
     }
     moduleInfoCache.set(

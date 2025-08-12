@@ -317,7 +317,7 @@ function importResolve(input: string, path: string, resolveImport: ImportResolve
   return {
     name: "resolve-import",
     resolveId,
-    resolveDynamicImport: resolveId
+    resolveDynamicImport: resolveId //suhcao:resolveDynamicImport 是一个专用于 动态导入（import()）路径解析 的钩子。它允许插件自定义如何处理 import('some-module') 这类动态导入语句。
   };
 }
 

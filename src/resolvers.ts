@@ -370,25 +370,36 @@ async function resolveResolvers(
     }
   }
 
-  // 第六阶段：跟踪外部包的传递性导入
-  // 这会填充导入缓存的其余部分
+  // 📦 第六阶段：跟踪外部包的传递性导入 - 包依赖解析的递归阶段
+  // 这是依赖解析机制的核心递归部分，会填充导入缓存的其余部分
+  // 
+  // 工作原理：
+  // 1. 遍历已解析的包（resolutions 映射表）
+  // 2. 对每个包，解析其内部的导入语句
+  // 3. 递归下载和解析传递性依赖
+  // 4. 构建完整的依赖图谱
   for (const [key, value] of resolutions) {
     if (key.startsWith("npm:")) {
-      // 处理 npm 包的传递依赖
+      // 🔍 处理 npm 包的传递依赖
+      // 示例：d3 包依赖 d3-array、d3-scale 等，这里会递归处理每个依赖
       for (const i of await resolveNpmImports(root, value)) {
         if (i.type === "local") {
+          // 构建依赖包的路径和说明符
           const path = resolvePath(value, i.name);
           const specifier = `npm:${extractNpmSpecifier(path)}`;
+          // 添加到全局导入集合，供后续处理
           globalImports.add(specifier);
           resolutions.set(specifier, path);
         }
       }
     } else if (key.startsWith("jsr:")) {
-      // 处理 jsr 包的传递依赖
+      // 🔍 处理 JSR 包的传递依赖
+      // JSR (JavaScript Registry) 是新的 JavaScript 包注册表
       for (const i of await resolveJsrImports(root, value)) {
         if (i.type === "local") {
           const path = resolvePath(value, i.name);
           let specifier: string;
+          // JSR 包可能依赖 npm 包或其他 JSR 包
           if (path.startsWith("/_npm/")) specifier = `npm:${extractNpmSpecifier(path)}`;
           else if (path.startsWith("/_jsr/")) specifier = `jsr:${extractJsrSpecifier(path)}`;
           else continue;
@@ -397,7 +408,8 @@ async function resolveResolvers(
         }
       }
     } else if (!/^\w+:/.test(key)) {
-      // 处理 bare imports 的传递依赖
+      // 🔍 处理 bare imports 的传递依赖
+      // bare imports 是不带协议前缀的导入，如 "lodash"、"react" 等
       for (const i of await resolveNodeImports(root, value)) {
         if (i.type === "local") {
           const path = resolvePath(value, i.name);

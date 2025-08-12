@@ -76,65 +76,131 @@ export function rewriteNpmImports(input: string, resolve: (s: string) => string 
 const npmRequests = new Map<string, Promise<string>>();
 
 /** Note: path must start with "/_npm/". */
+/**
+ * 填充 NPM 缓存 - 包依赖解析的核心函数
+ * 
+ * 这是 Observable Framework 包依赖解析机制的核心函数。当用户在 JS 模块中使用
+ * `import d3 from "npm:d3"` 这样的导入时，这个函数负责：
+ * 
+ * 1. **下载包文件**: 从 jsDelivr CDN 下载指定的 npm 包
+ * 2. **缓存管理**: 将包缓存到 .observablehq/cache/_npm/ 目录
+ * 3. **依赖解析**: 解析包的内部导入，构建依赖图谱
+ * 4. **路径重写**: 重写包内的导入路径为相对路径
+ * 
+ * @param root 项目根目录
+ * @param path npm 包路径，如 "/_npm/d3@7.8.5/+esm.js"
+ * @returns 缓存文件的本地路径
+ * 
+ * 工作流程：
+ * 1. 检查本地缓存，如果存在则直接返回
+ * 2. 从 jsDelivr CDN 下载包文件
+ * 3. 解析包的源码，找出内部依赖
+ * 4. 递归下载和解析传递性依赖
+ * 5. 重写导入路径并缓存到本地
+ */
 export async function populateNpmCache(root: string, path: string): Promise<string> {
+  // 验证路径格式，确保是有效的 npm 包路径
   if (!path.startsWith("/_npm/")) throw new Error(`invalid npm path: ${path}`);
+  
+  // 构建本地缓存路径：.observablehq/cache/_npm/package@version/file.js
   const outputPath = join(root, ".observablehq", "cache", path);
+  
+  // 如果已经缓存，直接返回（避免重复下载）
   if (existsSync(outputPath)) return outputPath;
+  
+  // 合并并发请求，避免同时下载同一个包
   let promise = npmRequests.get(outputPath);
   if (promise) return promise; // coalesce concurrent requests
+  
   promise = (async () => {
+    // 解析 npm 包说明符（如 "d3@7.8.5/+esm"）
     let specifier = extractNpmSpecifier(path);
     const s = parseNpmSpecifier(specifier);
+    
+    // 特殊处理：sql.js 包的路径修正
     // https://github.com/sql-js/sql.js/issues/284
     if (s.name === "sql.js" && s.path === "+esm") {
       specifier = formatNpmSpecifier({...s, path: "dist/sql-wasm.js"});
     }
+    
+    // 构建 jsDelivr CDN 下载链接
     const href = `https://cdn.jsdelivr.net/npm/${specifier}`;
     console.log(`npm:${specifier} ${faint("→")} ${outputPath}`);
+    
+    // 从 CDN 下载包文件
     const response = await fetch(href);
     if (!response.ok) throw new Error(`unable to fetch: ${href}`);
+    
+    // 创建缓存目录
     await mkdir(dirname(outputPath), {recursive: true});
+    
+    // 根据文件类型进行不同处理
     if (/^application\/javascript(;|$)/i.test(response.headers.get("content-type")!)) {
+      // JavaScript 文件：需要解析依赖并重写导入路径
       let source = await response.text();
+      
+      // sql.js 特殊处理：添加模块导出
       if (s.name === "sql.js" && s.path === "+esm") {
         source = "var module;\n" + source + "\nexport default initSqlJs;";
       }
+      
+      // 🔍 关键步骤：获取依赖解析器，这会解析 package.json 和传递依赖
       const resolver = await getDependencyResolver(root, path, source);
+      
+      // 重写源码中的导入路径，并写入缓存
       await writeFile(outputPath, rewriteNpmImports(source, resolver), "utf-8");
     } else {
+      // 非 JavaScript 文件：直接写入二进制数据
       await writeFile(outputPath, Buffer.from(await response.arrayBuffer()));
     }
+    
     return outputPath;
   })();
+  
+  // 清理请求缓存，处理错误情况
   promise.catch(console.error).then(() => npmRequests.delete(outputPath));
   npmRequests.set(outputPath, promise);
   return promise;
 }
 
 /**
- * Returns an import resolver for rewriting an npm module from jsDelivr,
- * replacing /npm/ import specifiers with relative paths, and re-resolving
- * versions against the module’s package.json file. (jsDeliver bakes-in the
- * exact version the first time a module is built and doesn’t update it when a
- * new version of a dependency is published; we always want to import the latest
- * version to ensure that we don’t load duplicate copies of transitive
- * dependencies at different versions.)
+ * 获取依赖解析器 - package.json 解析的核心函数
+ * 
+ * 这是 Observable Framework 包依赖解析机制中最关键的函数之一。它负责：
+ * 
+ * 1. **解析包源码**: 分析下载的 npm 包源码，找出所有内部导入
+ * 2. **下载 package.json**: 获取包的依赖声明文件
+ * 3. **解析依赖关系**: 从 package.json 中提取 dependencies、devDependencies、peerDependencies
+ * 4. **版本解析**: 根据 semver 范围解析具体的依赖版本
+ * 5. **递归下载**: 下载所有传递性依赖
+ * 6. **路径重写**: 将 /npm/ 路径重写为相对路径
+ * 
+ * jsDelivr CDN 会"烘焙"第一次构建时的确切版本，当依赖的新版本发布时不会更新。
+ * 我们总是希望导入最新版本，以确保不会在不同版本之间加载传递依赖的重复副本。
+ * 
+ * 示例流程（以 d3 包为例）：
+ * 1. 解析 d3 源码，发现导入 "/npm/d3-array@3", "/npm/d3-scale@4" 等
+ * 2. 下载 d3 的 package.json，获取依赖版本：{"d3-array": "3", "d3-scale": "4"}
+ * 3. 递归下载 d3-array@3.2.4, d3-scale@4.0.2 等具体版本
+ * 4. 重写路径："/npm/d3-array@3" → "../../d3-array@3.2.4/+esm.js"
  */
 export async function getDependencyResolver(
   root: string,
   path: string,
   input: string
 ): Promise<(specifier: string) => string> {
+  // 解析包源码的 AST，用于查找导入语句
   const body = parseProgram(input);
   const dependencies = new Set<string>();
   const {name, range} = parseNpmSpecifier(extractNpmSpecifier(path));
 
+  // 遍历 AST，查找所有类型的导入语句
   simple(body, {
-    ImportDeclaration: findImport,
-    ImportExpression: findImport,
-    ExportAllDeclaration: findImport,
-    ExportNamedDeclaration: findImport,
-    CallExpression: findImportMetaResolve
+    ImportDeclaration: findImport,        // import ... from "..."
+    ImportExpression: findImport,         // import("...")
+    ExportAllDeclaration: findImport,     // export * from "..."
+    ExportNamedDeclaration: findImport,   // export { ... } from "..."
+    CallExpression: findImportMetaResolve // import.meta.resolve("...")
   });
 
   function findImport(node: ImportNode | ExportNode) {
@@ -149,38 +215,51 @@ export async function getDependencyResolver(
     }
   }
 
+  /**
+   * 分析导入源，收集需要解析的依赖
+   * 只处理 /npm/ 开头的导入（jsDelivr 内部导入格式）
+   */
   function findImportSource(source: StringLiteral) {
     const value = getStringLiteralValue(source);
     if (value.startsWith("/npm/")) {
       const {name: depName, range: depRange} = parseNpmSpecifier(value.slice("/npm/".length));
-      if (depName === name) return; // ignore self-references, e.g. mermaid plugin
-      if (depRange && existsSync(join(root, ".observablehq", "cache", "_npm", `${depName}@${depRange}`))) return; // already resolved
+      if (depName === name) return; // 忽略自引用，如 mermaid 插件
+      if (depRange && existsSync(join(root, ".observablehq", "cache", "_npm", `${depName}@${depRange}`))) return; // 已经解析过
       dependencies.add(value);
     }
   }
 
   const resolutions = new Map<string, string>();
 
-  // If there are dependencies to resolve, load the package.json and use the semver
-  // range there instead of the (stale) resolution that jsDelivr provides.
+  // 🔍 关键步骤：如果有依赖需要解析，下载并解析 package.json
   if (dependencies.size > 0) {
+    // 📄 下载当前包的 package.json 文件
     const pkgPath = await populateNpmCache(root, `/_npm/${name}@${range}/package.json`);
     const pkg = JSON.parse(await readFile(pkgPath, "utf-8"));
+    
+    // 🔄 遍历每个依赖，从 package.json 中获取版本范围
     for (const dependency of dependencies) {
       const {name: depName, path: depPath = "+esm"} = parseNpmSpecifier(dependency.slice("/npm/".length));
+      
+      // 📋 从 package.json 的不同字段中查找依赖版本
       const range =
-        (name === "arquero" || name === "@uwdata/mosaic-core" || name === "@duckdb/duckdb-wasm") && depName === "apache-arrow" // prettier-ignore
-          ? "latest" // force Arquero, Mosaic & DuckDB-Wasm to use the (same) latest version of Arrow
+        // 特殊版本强制策略：某些包需要使用特定版本以避免冲突
+        (name === "arquero" || name === "@uwdata/mosaic-core" || name === "@duckdb/duckdb-wasm") && depName === "apache-arrow"
+          ? "latest" // 强制 Arquero、Mosaic 和 DuckDB-Wasm 使用相同的最新 Arrow 版本
           : name === "@uwdata/mosaic-core" && depName === "@duckdb/duckdb-wasm"
-          ? DUCKDB_WASM_VERSION // force Mosaic to use the latest (stable) version of DuckDB-Wasm
-          : pkg.dependencies?.[depName] ??
-            pkg.devDependencies?.[depName] ??
-            pkg.peerDependencies?.[depName] ??
+          ? DUCKDB_WASM_VERSION // 强制 Mosaic 使用最新稳定版 DuckDB-Wasm
+          // 标准依赖解析：按优先级查找版本范围
+          : pkg.dependencies?.[depName] ??           // 生产依赖
+            pkg.devDependencies?.[depName] ??        // 开发依赖  
+            pkg.peerDependencies?.[depName] ??       // 对等依赖
             void console.warn(yellow(`${depName} is an undeclared dependency of ${name}; resolving latest version`));
+      
+      // 🔄 递归解析依赖：这会触发新的下载和依赖解析循环
       resolutions.set(dependency, await resolveNpmImport(root, `${depName}${range ? `@${range}` : ""}/${depPath}`));
     }
   }
 
+  // 返回路径解析函数：将 /npm/ 路径转换为相对路径
   return (specifier: string) => {
     if (!specifier.startsWith("/npm/")) return specifier;
     if (resolutions.has(specifier)) specifier = resolutions.get(specifier)!;
@@ -226,30 +305,70 @@ function getNpmVersionCache(root: string): Promise<Map<string, string[]>> {
   return cache;
 }
 
+/**
+ * 解析 NPM 包版本 - 包依赖解析的版本确定阶段
+ * 
+ * 这个函数是包依赖解析机制中负责版本解析的核心部分。它的工作流程：
+ * 
+ * 1. **版本缓存检查**: 首先检查本地缓存，避免重复的网络请求
+ * 2. **npm registry 查询**: 查询 npm 官方注册表获取包的版本信息
+ * 3. **semver 版本匹配**: 根据版本范围（如 "^1.0.0"）找到最佳匹配版本
+ * 4. **版本缓存更新**: 将解析结果缓存到本地，提高后续解析速度
+ * 
+ * @param root 项目根目录
+ * @param param1 包说明符，包含包名和版本范围
+ * @returns 解析出的具体版本号
+ * 
+ * 示例流程：
+ * 输入: {name: "d3", range: "^7.0.0"}
+ * 1. 查询: https://registry.npmjs.org/d3
+ * 2. 获取所有版本: ["7.0.0", "7.1.0", "7.8.5", ...]
+ * 3. 匹配最佳版本: "7.8.5"（满足 ^7.0.0 的最新版本）
+ * 4. 返回: "7.8.5"
+ */
 async function resolveNpmVersion(root: string, {name, range}: NpmSpecifier): Promise<string> {
+  // 如果已经是精确版本（如 "1.2.3"），直接返回
   if (range && /^\d+\.\d+\.\d+([-+].*)?$/.test(range)) return range; // exact version specified
+  
+  // 检查本地版本缓存，避免重复的网络请求
   const cache = await getNpmVersionCache(root);
   const versions = cache.get(name);
   if (versions) for (const version of versions) if (!range || satisfies(version, range)) return version;
+  
+  // 如果没有指定范围，默认使用 "latest"
   if (range === undefined) range = "latest";
+  
+  // 区分版本范围和 dist-tag（如 "latest", "beta"）
   const disttag = validRange(range) ? null : range;
   const href = `https://registry.npmjs.org/${name}${disttag ? `/${disttag}` : ""}`;
+  
+  // 合并并发请求，避免同时查询同一个包
   let promise = npmVersionRequests.get(href);
   if (promise) return promise; // coalesce concurrent requests
+  
   promise = (async function () {
     const input = formatNpmSpecifier({name, range});
     process.stdout.write(`npm:${input} ${faint("→")} `);
+    
+    // 🌐 查询 npm registry，获取包的版本信息
     const response = await fetch(href, {...(!disttag && {headers: {Accept: "application/vnd.npm.install-v1+json"}})});
     if (!response.ok) throw new Error(`unable to fetch: ${href}`);
     const body = await response.json();
+    
+    // 📋 解析版本：dist-tag 直接使用，版本范围需要匹配
     const version = disttag ? body.version : maxSatisfying(Object.keys(body.versions), range);
     if (!version) throw new Error(`unable to resolve version: ${input}`);
+    
     const output = formatNpmSpecifier({name, range: version});
     process.stdout.write(`npm:${output}\n`);
+    
+    // 💾 更新版本缓存，并创建磁盘缓存目录
     cache.set(name, versions ? rsort(versions.concat(version)) : [version]);
     mkdir(join(root, ".observablehq", "cache", "_npm", output), {recursive: true}); // disk cache
     return version;
   })();
+  
+  // 清理请求缓存，处理错误情况
   promise.catch(console.error).then(() => npmVersionRequests.delete(href));
   npmVersionRequests.set(href, promise);
   return promise;
