@@ -217,7 +217,7 @@ export async function getDependencyResolver(
 
   /**
    * 分析导入源，收集需要解析的依赖
-   * 只处理 /npm/ 开头的导入（jsDelivr 内部导入格式）
+   * 只处理 /npm/ 开头的导入（jsDelivr 内部导入格式）//suchao:内部依赖（如 @popperjs/core）会被重写成 /npm/@popperjs/core@2.x/+esm 这样的 URL，无需再手动处理路径。
    */
   function findImportSource(source: StringLiteral) {
     const value = getStringLiteralValue(source);
