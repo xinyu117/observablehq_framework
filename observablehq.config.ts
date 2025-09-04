@@ -3,6 +3,10 @@ import {readFile, readdir, stat} from "node:fs/promises";
 import {join} from "node:path/posix";
 import {formatPrefix} from "d3-format";
 import {themes} from "./docs/themes.md.ts";
+import {ProxyAgent, setGlobalDispatcher} from "undici";
+
+const proxyAgent = new ProxyAgent({uri: "http://10.1.128.235:3128"});
+setGlobalDispatcher(proxyAgent)
 
 let stargazers_count: number;
 try {

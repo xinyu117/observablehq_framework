@@ -21,6 +21,7 @@
   "scripts": {
     "dev": "tsx watch --ignore docs --no-warnings=ExperimentalWarning ./src/bin/observable.ts preview --no-open --cors",
     "docs:build": "tsx --no-warnings=ExperimentalWarning ./src/bin/observable.ts build",
+    "docs:build:debug": "tsx --inspect-brk --no-warnings=ExperimentalWarning ./src/bin/observable.ts build",
     "docs:deploy": "tsx --no-warnings=ExperimentalWarning ./src/bin/observable.ts deploy",
     "build": "rimraf dist && node build.js --outdir=dist --outbase=src \"src/**/*.{ts,js,css}\" --ignore \"**/*.d.ts\"",
     "test": "concurrently npm:test:mocha npm:test:tsc npm:test:lint npm:test:prettier",

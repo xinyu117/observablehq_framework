@@ -89,6 +89,11 @@ function normalizeTheme(theme: string | undefined): string {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const {values} = parseArgs({options: {theme: {type: "string"}}});
-  process.stdout.write(render(normalizeTheme(values.theme)));
+  // 🔧 修复：正确配置 parseArgs 以处理 --param-theme 参数
+  const {values} = parseArgs({
+    options: {
+      "param-theme": {type: "string"}  // 匹配 defineParams 生成的参数名
+    }
+  });
+  process.stdout.write(render(normalizeTheme(values["param-theme"])));
 }
