@@ -1,0 +1,25 @@
+{
+  "name": "pcb-graph",
+  "type": "module",
+  "version": "1.0.0",
+  "description": "多对多关系图",
+  "author": "",
+  "license": "ISC",
+  "scripts": {
+    "clean": "rimraf src/.observablehq/cache",
+    "build": "observable build",
+    "build_debug": "observable_debug build",
+    "dev": "observable preview",
+    "deploy": "observable deploy",
+    "observable": "observable"
+  },
+  "dependencies": {
+    "@observablehq/framework": "latest"
+  },
+  "devDependencies": {
+    "rimraf": "^5.0.5"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
