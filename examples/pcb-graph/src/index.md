@@ -2,7 +2,8 @@
 
 ```js
 import {_dataLevel, generateGraphData, createNodeIndex, groupByLevel,CSVToJSON } from "./components/transform_data.js";
-import {renderChart } from "./components/chart.js";
+//import {renderChart } from "./components/chart.js";
+import {renderChart,renderInteractiveChart } from "./components/chart_svgjs.js";
 
 
 const hotelData = FileAttachment("data/aa.csv").csv({typed: true});
@@ -28,6 +29,8 @@ const pagesSource = view(Inputs.textarea({
 display(pagesSource);
 
 ```
+
+ <div id="svgjs" class="observablehq" style="overflow: scroll;"></div>
 
 ```js
 

@@ -143,52 +143,191 @@ export function constructTangleLayout(levels, options = {}) {
 
 export function renderChart(data, options = {}) {
   const color = d3.scaleOrdinal(d3.schemeDark2);
-  options.color ||= (d, i) => color(i)
+  options.color ||= (d, i) => color(i);
   const background_color = 'white';
   const stroke_width = 5;
 
   const tangleLayout = constructTangleLayout(_.cloneDeep(data), options);
 
-  // 弧度描绘：https://www.cnblogs.com/fzz9/p/9249738.html
+  // 创建一个临时的 div 容器用于 SVG.js
+  const container = document.createElement('div');
+  
+  // 使用 SVG.js 创建 SVG 画布
+  const draw = SVG("svgjs").size(tangleLayout.layout.width, tangleLayout.layout.height);
+  
+  // 设置背景色
+  draw.rect(tangleLayout.layout.width, tangleLayout.layout.height).fill(background_color);
+  
+  // 添加样式
+  const style = draw.defs().element('style');
+  style.node.textContent = `
+    text {
+      font-family: sans-serif;
+      font-size: 10px;
+    }
+    .node {
+      stroke-linecap: round;
+    }
+    .link {
+      fill: none;
+    }
+  `;
 
-  return svg`<svg width="${tangleLayout.layout.width}" height="${tangleLayout.layout.height}" style="background-color: ${background_color}">
-          <style>
-            text {
-              font-family: sans-serif;
-              font-size: 10px;
-            }
-            .node {
-              stroke-linecap: round;
-            }
-            .link {
-              fill: none;
-            }
-          </style>
+  // 绘制线束（bundles）
+  tangleLayout.bundles.forEach((b, i) => {
+    // 构建路径数据
+    const pathData = b.links.map(l => 
+      `M${l.xt} ${l.yt}
+       L${l.xb - l.c1} ${l.yt}
+       A${l.c1} ${l.c1} 90 0 1 ${l.xb} ${l.yt + l.c1}
+       L${l.xb} ${l.ys - l.c2}
+       A${l.c2} ${l.c2} 90 0 0 ${l.xb + l.c2} ${l.ys}
+       L${l.xs} ${l.ys}`
+    ).join("");
 
-  ${tangleLayout.bundles.map((b, i) => {
-      let d = b.links.map(
-            l => `M${l.xt} ${l.yt}
-              L${l.xb - l.c1} ${l.yt}
-              A${l.c1} ${l.c1} 90 0 1 ${l.xb} ${l.yt + l.c1}
-              L${l.xb} ${l.ys - l.c2}
-              A${l.c2} ${l.c2} 90 0 0 ${l.xb + l.c2} ${l.ys}
-              L${l.xs} ${l.ys}`).join("");
+    // 绘制背景路径（白色描边）
+    draw.path(pathData)
+        .addClass('link')
+        .fill('none')
+        .stroke(background_color)
+        .attr('stroke-width', stroke_width);
 
-      return svg.fragment`
-          <path class="link" d="${d}" stroke="${background_color}" stroke-width="${stroke_width}"/>
-          <path class="link" d="${d}" stroke="${options.color(b, i)}" stroke-width="2"/>`;
-    })}
+    // 绘制前景路径（彩色描边）
+    draw.path(pathData)
+        .addClass('link')
+        .fill('none')
+        .stroke(options.color(b, i))
+        .attr('stroke-width', 2);
+  });
 
+  // 绘制节点
+  tangleLayout.nodes.forEach(n => {
+    // 节点的黑色描边
+    draw.line(n.x, n.y - n.height / 2, n.x, n.y + n.height / 2)
+        .addClass('selectable node')
+        .attr('data-id', n.id)
+        .stroke('black')
+        .attr('stroke-width', 8);
 
-  ${tangleLayout.nodes.map(
-      n => svg.fragment`
-        <path class="selectable node" data-id="${n.id}" stroke="black" stroke-width="8"
-            d="M${n.x} ${n.y - n.height / 2} L${n.x} ${n.y + n.height / 2}"/>
-        <path class="node" stroke="white" stroke-width="4" 
-            d="M${n.x} ${n.y - n.height / 2} L${n.x} ${n.y + n.height / 2}"/>
-        <text class="selectable" data-id="${n.id}" x="${n.x + 4}" y="${n.y - n.height / 2 - 4}" stroke="${background_color}" stroke-width="2">${n.id}</text>
-        <text x="${n.x + 4}" y="${n.y - n.height / 2 - 4}" style="pointer-events: none;">${n.id}</text>`
-    )}
+    // 节点的白色描边
+    draw.line(n.x, n.y - n.height / 2, n.x, n.y + n.height / 2)
+        .addClass('node')
+        .stroke('white')
+        .attr('stroke-width', 4);
 
-  </svg>`;
+    // 节点标签的背景描边
+    const textBg = draw.text(n.id)
+        .addClass('selectable')
+        .attr('data-id', n.id)
+        .move(n.x + 4, n.y - n.height / 2 - 4)
+        .stroke(background_color)
+        .attr('stroke-width', 2);
+
+         // 节点标签的前景文本
+     const textFg = draw.text(n.id)
+         .move(n.x + 4, n.y - n.height / 2 - 4)
+         .attr('style', 'pointer-events: none');
+  });
+
+  // 返回生成的 SVG 元素
+  return draw.node;
+}
+
+/**
+ * 使用 SVG.js 创建可交互的图表版本
+ * @param {Array} data - 图表数据
+ * @param {Object} options - 配置选项
+ * @returns {HTMLElement} SVG 元素
+ */
+export function renderInteractiveChart(data, options = {}) {
+  const color = d3.scaleOrdinal(d3.schemeDark2);
+  options.color ||= (d, i) => color(i);
+  const background_color = 'white';
+  const stroke_width = 5;
+
+  const tangleLayout = constructTangleLayout(_.cloneDeep(data), options);
+
+     // 使用 SVG.js 创建 SVG 画布
+   const draw = SVG("svgjs").size(tangleLayout.layout.width, tangleLayout.layout.height);
+  
+  // 设置背景色
+  draw.rect(tangleLayout.layout.width, tangleLayout.layout.height).fill(background_color);
+
+  // 绘制线束（bundles）- 添加交互功能
+  const bundleGroup = draw.group().addClass('bundles');
+  tangleLayout.bundles.forEach((b, i) => {
+    const pathData = b.links.map(l => 
+      `M${l.xt} ${l.yt}
+       L${l.xb - l.c1} ${l.yt}
+       A${l.c1} ${l.c1} 90 0 1 ${l.xb} ${l.yt + l.c1}
+       L${l.xb} ${l.ys - l.c2}
+       A${l.c2} ${l.c2} 90 0 0 ${l.xb + l.c2} ${l.ys}
+       L${l.xs} ${l.ys}`
+    ).join("");
+
+    const bundleGroup = draw.group().addClass('bundle');
+    
+    // 背景路径
+    const bgPath = bundleGroup.path(pathData)
+        .fill('none')
+        .stroke(background_color)
+        .attr('stroke-width', stroke_width);
+
+    // 前景路径
+    const fgPath = bundleGroup.path(pathData)
+        .fill('none')
+        .stroke(options.color(b, i))
+        .attr('stroke-width', 2);
+
+         // 添加鼠标悬停效果
+     bundleGroup
+         .mouseover(function() {
+           fgPath.attr('stroke-width', 4);
+         })
+         .mouseout(function() {
+           fgPath.attr('stroke-width', 2);
+         })
+         .attr('style', 'cursor: pointer');
+  });
+
+  // 绘制节点 - 添加交互功能
+  const nodeGroup = draw.group().addClass('nodes');
+  tangleLayout.nodes.forEach(n => {
+    const singleNodeGroup = nodeGroup.group().addClass('node');
+    
+    // 节点线条
+    const nodeLine = singleNodeGroup.group();
+    nodeLine.line(n.x, n.y - n.height / 2, n.x, n.y + n.height / 2)
+        .stroke('black')
+        .attr('stroke-width', 8);
+    nodeLine.line(n.x, n.y - n.height / 2, n.x, n.y + n.height / 2)
+        .stroke('white')
+        .attr('stroke-width', 4);
+
+    // 节点标签
+    const nodeText = singleNodeGroup.group();
+    nodeText.text(n.id)
+        .move(n.x + 4, n.y - n.height / 2 - 4)
+        .stroke(background_color)
+        .attr('stroke-width', 2);
+    nodeText.text(n.id)
+        .move(n.x + 4, n.y - n.height / 2 - 4)
+        .fill('black');
+
+         // 添加点击事件
+     singleNodeGroup
+         .click(function() {
+           console.log('Node clicked:', n.id);
+           // 可以在这里添加自定义的点击处理逻辑
+         })
+         .mouseover(function() {
+           nodeText.attr('font-weight', 'bold');
+         })
+         .mouseout(function() {
+           nodeText.attr('font-weight', 'normal');
+         })
+         .attr('style', 'cursor: pointer');
+  });
+
+  return draw.node;
 }
