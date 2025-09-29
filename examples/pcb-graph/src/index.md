@@ -3,6 +3,7 @@
 ```js
 import {_dataLevel, generateGraphData, createNodeIndex, groupByLevel,CSVToJSON } from "./components/transform_data.js";
 //import {renderChart } from "./components/chart.js";
+//import {renderChart } from "./components/chart_with_react_dialog.js";
 import {renderChart,renderInteractiveChart } from "./components/chart_svgjs.js";
 
 
@@ -36,7 +37,7 @@ display(pagesSource);
 
 const csvObj = CSVToJSON(pagesSource);
 const data = groupByLevel(createNodeIndex(csvObj));
-const chart = renderChart(data);
+const chart = renderInteractiveChart(data);
 
 ```
 

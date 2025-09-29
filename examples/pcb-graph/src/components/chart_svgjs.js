@@ -2,209 +2,9 @@ import _ from "npm:lodash";
 import * as d3 from "npm:d3";
 import { svg, html } from "npm:htl";
 import SVG from "npm:svg.js";
-import React from "npm:react";
-import ReactDOM from "npm:react-dom/client";
+import { dialogManager } from "./DialogManager.js";
 
-// React 组件：节点信息对话框
-const NodeDialog = ({ node, onClose }) => {
-  return React.createElement('div', {
-    style: {
-      position: 'fixed',
-      top: '50%',
-      left: '50%',
-      transform: 'translate(-50%, -50%)',
-      backgroundColor: 'white',
-      border: '2px solid #333',
-      borderRadius: '8px',
-      padding: '20px',
-      minWidth: '300px',
-      boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
-      zIndex: 1000
-    }
-  }, [
-    React.createElement('div', {
-      key: 'header',
-      style: {
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: '15px',
-        borderBottom: '1px solid #eee',
-        paddingBottom: '10px'
-      }
-    }, [
-      React.createElement('h3', {
-        key: 'title',
-        style: { margin: 0, color: '#333' }
-      }, `节点信息: ${node.id}`),
-      React.createElement('button', {
-        key: 'close',
-        onClick: onClose,
-        style: {
-          background: 'none',
-          border: 'none',
-          fontSize: '18px',
-          cursor: 'pointer',
-          color: '#666'
-        }
-      }, '✕')
-    ]),
-    React.createElement('div', {
-      key: 'content',
-      style: { lineHeight: '1.6' }
-    }, [
-      React.createElement('p', { key: 'id' }, `ID: ${node.id}`),
-      React.createElement('p', { key: 'level' }, `Level: ${node.level}`),
-      React.createElement('p', { key: 'position' }, `位置: (${Math.round(node.x)}, ${Math.round(node.y)})`),
-      React.createElement('p', { key: 'height' }, `高度: ${node.height}`),
-      React.createElement('p', { key: 'bundles' }, `线束数量: ${node.bundles?.length || 0}`),
-      node.parents?.length > 0 && React.createElement('div', { key: 'parents' }, [
-        React.createElement('p', { key: 'parents-title' }, '父节点:'),
-        React.createElement('ul', { key: 'parents-list', style: { margin: '5px 0', paddingLeft: '20px' } }, 
-          node.parents.map((parent, i) => 
-            React.createElement('li', { key: i }, parent.id)
-          )
-        )
-      ])
-    ])
-  ]);
-};
 
-// React 组件：路径信息对话框
-const PathDialog = ({ bundle, onClose }) => {
-  return React.createElement('div', {
-    style: {
-      position: 'fixed',
-      top: '50%',
-      left: '50%',
-      transform: 'translate(-50%, -50%)',
-      backgroundColor: 'white',
-      border: '2px solid #666',
-      borderRadius: '8px',
-      padding: '20px',
-      minWidth: '350px',
-      boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
-      zIndex: 1000
-    }
-  }, [
-    React.createElement('div', {
-      key: 'header',
-      style: {
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: '15px',
-        borderBottom: '1px solid #eee',
-        paddingBottom: '10px'
-      }
-    }, [
-      React.createElement('h3', {
-        key: 'title',
-        style: { margin: 0, color: '#666' }
-      }, '线束信息'),
-      React.createElement('button', {
-        key: 'close',
-        onClick: onClose,
-        style: {
-          background: 'none',
-          border: 'none',
-          fontSize: '18px',
-          cursor: 'pointer',
-          color: '#666'
-        }
-      }, '✕')
-    ]),
-    React.createElement('div', {
-      key: 'content',
-      style: { lineHeight: '1.6' }
-    }, [
-      React.createElement('p', { key: 'id' }, `ID: ${bundle.id}`),
-      React.createElement('p', { key: 'level' }, `Level: ${bundle.level}`),
-      React.createElement('p', { key: 'span' }, `跨度: ${bundle.span}`),
-      React.createElement('p', { key: 'position' }, `位置: (${Math.round(bundle.x)}, ${Math.round(bundle.y)})`),
-      React.createElement('p', { key: 'links' }, `连接数量: ${bundle.links?.length || 0}`),
-      bundle.links?.length > 0 && React.createElement('div', { key: 'connections' }, [
-        React.createElement('p', { key: 'connections-title' }, '连接信息:'),
-        React.createElement('ul', { key: 'connections-list', style: { margin: '5px 0', paddingLeft: '20px' } }, 
-          bundle.links.slice(0, 5).map((link, i) => 
-            React.createElement('li', { key: i }, `${link.source.id} → ${link.target.id}`)
-          )
-        ),
-        bundle.links.length > 5 && React.createElement('p', { 
-          key: 'more', 
-          style: { fontStyle: 'italic', color: '#666', margin: '5px 0 0 20px' } 
-        }, `...还有 ${bundle.links.length - 5} 个连接`)
-      ])
-    ])
-  ]);
-};
-
-// 对话框管理器
-class DialogManager {
-  constructor() {
-    this.container = null;
-    this.root = null;
-    this.overlay = null;
-  }
-
-  createContainer() {
-    if (!this.container) {
-      // 创建遮罩层
-      this.overlay = document.createElement('div');
-      this.overlay.style.cssText = `
-        position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background-color: rgba(0, 0, 0, 0.5);
-        z-index: 999;
-      `;
-      
-      // 创建对话框容器
-      this.container = document.createElement('div');
-      this.overlay.appendChild(this.container);
-      document.body.appendChild(this.overlay);
-      
-      this.root = ReactDOM.createRoot(this.container);
-      
-      // 点击遮罩层关闭对话框
-      this.overlay.addEventListener('click', (e) => {
-        if (e.target === this.overlay) {
-          this.close();
-        }
-      });
-    }
-  }
-
-  showNodeDialog(node) {
-    this.createContainer();
-    this.root.render(React.createElement(NodeDialog, {
-      node: node,
-      onClose: () => this.close()
-    }));
-  }
-
-  showPathDialog(bundle) {
-    this.createContainer();
-    this.root.render(React.createElement(PathDialog, {
-      bundle: bundle,
-      onClose: () => this.close()
-    }));
-  }
-
-  close() {
-    if (this.overlay) {
-      document.body.removeChild(this.overlay);
-      this.container = null;
-      this.root = null;
-      this.overlay = null;
-    }
-  }
-}
-
-// 创建全局对话框管理器实例
-const dialogManager = new DialogManager();
 
 export function constructTangleLayout(levels, options = {}) {
   // 为节点添加level属性
@@ -432,13 +232,13 @@ export function renderChart(data, options = {}) {
     const textBg = draw.text(n.id)
         .addClass('selectable')
         .attr('data-id', n.id)
-        .move(n.x + 4, n.y - n.height / 2 - 14)
+        .move(n.x + 4, n.y - n.height / 2 - 16)
         .stroke(background_color)
         .attr('stroke-width', 2);
 
          // 节点标签的前景文本
      const textFg = draw.text(n.id)
-         .move(n.x + 4, n.y - n.height / 2 - 14)
+         .move(n.x + 4, n.y - n.height / 2 - 16)
          .attr('style', 'pointer-events: none');
   });
 
@@ -446,10 +246,7 @@ export function renderChart(data, options = {}) {
   return draw.node;
 }
 
-/**
- * 导出对话框管理器，供外部访问
- */
-export { dialogManager };
+
 
 /**
  * 使用 SVG.js 创建可交互的图表版本
@@ -543,11 +340,11 @@ export function renderInteractiveChart(data, options = {}) {
     // 节点标签
     const nodeText = singleNodeGroup.group();
     nodeText.text(n.id)
-        .move(n.x + 4, n.y - n.height / 2 - 14)
+        .move(n.x + 4, n.y - n.height / 2 - 16)
         .stroke(background_color)
         .attr('stroke-width', 2);
     nodeText.text(n.id)
-        .move(n.x + 4, n.y - n.height / 2 - 14)
+        .move(n.x + 4, n.y - n.height / 2 - 16)
         .fill('black');
 
          // 添加交互事件
