@@ -1,7 +1,7 @@
 import _ from "npm:lodash";
 import * as d3 from "npm:d3";
 import { svg, html } from "npm:htl";
-import SVG from "npm:svg.js";
+import {SVG} from "npm:@svgdotjs/svg.js";
 import { dialogManager } from "./DialogManager.js";
 
 
@@ -263,7 +263,7 @@ export function renderInteractiveChart(data, options = {}) {
   const tangleLayout = constructTangleLayout(_.cloneDeep(data), options);
 
      // 使用 SVG.js 创建 SVG 画布
-   const draw = SVG("svgjs").size(tangleLayout.layout.width, tangleLayout.layout.height);
+   const draw = SVG().addTo("#svgjs").size(tangleLayout.layout.width, tangleLayout.layout.height);
   
   // 设置背景色
   draw.rect(tangleLayout.layout.width, tangleLayout.layout.height).fill(background_color);
