@@ -1,0 +1,333 @@
+1.href="./_observablehq/client.dfdda2bd.js"这个文件路径，是如何从编译（build）开始，一步一步写到index.html这个文件中的
+我会先沿着构建链路定位这个 `href` 的来源：从 build 命令入口到 HTML 渲染函数，再到资源清单（hashed 文件名）生成位置，最后给你还原“从编译到写入 `dist/index.html`”的逐步流程。接下来我先快速检索相关源码并读取关键函数。
+
+先做一次全局文本搜索，目标是找到 `client.*.js`、`modulepreload`、`renderPage`、以及资源哈希命名的实现位置，从而串起完整调用链。
+
+Searched for regex `client\.[a-f0-9]+\.js|modulepreload|renderPage\(|_observablehq/client` (`**/src/**`), 19 results
+
+Searched for regex `build\(|command.*build|dist/index.html|writeFile|emit|manifest|hash` (`**/src/**`), 200 results
+
+已经定位到主链路在 build.ts 与 render.ts。我现在读取这两个文件的关键片段，提取“哈希文件名如何生成、如何替换、如何注入 HTML”的精确步骤。
+
+Read [](file:///d%3A/github/observablehq_framework/src/build.ts#90-90), lines 90 to 210
+
+Read [](file:///d%3A/github/observablehq_framework/src/build.ts#230-230), lines 230 to 390
+
+Read [](file:///d%3A/github/observablehq_framework/src/build.ts#390-390), lines 390 to 739
+
+接下来我读取 `renderPage` 的实现，确认 `href` 是在哪一行由 `resolveImport("/_observablehq/client.js")` 转成 `./_observablehq/client.hash.js` 并拼进 HTML。
+
+Read [](file:///d%3A/github/observablehq_framework/src/render.ts)
+
+Read [](file:///d%3A/github/observablehq_framework/src/html.ts#130-130), lines 130 to 260
+
+Read [](file:///d%3A/github/observablehq_framework/src/bin/observable.ts#70-70), lines 70 to 140
+
+我已经拿到渲染点了，再补一段 resolvers.ts：确认 `observablehq:client` 映射到 `/_observablehq/client.js`，以及如何变成相对路径 `./_observablehq/...`。
+
+Searched for regex `observablehq:client|resolveImport\(|getResolvers\(|resolveImportPath|resolveBuiltin` (`**/src/resolvers.ts`), 11 results
+
+Read [](file:///d%3A/github/observablehq_framework/src/resolvers.ts#520-520), lines 520 to 779
+
+Read [](file:///d%3A/github/observablehq_framework/src/resolvers.ts#300-300), lines 300 to 520
+
+我再补读 resolvers.ts 顶部内置映射，确认 `observablehq:client` 是否先被归一化到 `/_observablehq/client.js`（这是你问的这个具体路径来源）。
+
+Read [](file:///d%3A/github/observablehq_framework/src/resolvers.ts#1-1), lines 1 to 130
+
+最后补一处路径工具函数，确认为什么最终是 `./_observablehq/...`（带 `./`）而不是绝对路径。然后我给你按时间顺序写完整链路。
+
+Searched for regex `export function relativePath\(|function relativePath\(` (`**/src/path.ts`), 1 result
+
+Read [](file:///d%3A/github/observablehq_framework/src/path.ts#1-1), lines 1 to 40
+
+我再补一段 `getResolvers` 早期逻辑，确认 `observablehq:client` 何时被放进 `staticImports`（它决定了 `<link rel="modulepreload">` 会不会出现）。
+
+Read [](file:///d%3A/github/observablehq_framework/src/resolvers.ts#130-130), lines 130 to 280
+
+我会再抓一组精确行号，方便你对照源码逐行跟踪（入口、哈希别名、渲染注入、落盘）。然后给你最终的“从 build 到 index.html”时间线。
+
+Searched for regex ``case "build"|build\.build\(|writeFile\(`${path}\.html`|applyHash\(|aliases\.set\(path, alias\)|resolveImport\("observablehq:client"\)|renderModulePreload\(|Array\.from\(new Set\(Array\.from\(staticImports, resolveImport\)\)`` (`**/src/**/*.{ts,js}`), 3 results
+
+Searched for regex `` defaultImports|new Set<string>\(defaultImports\)|specifier\.startsWith\("observablehq:"\)|return `/_observablehq/\$\{specifier\.slice\("observablehq:"\.length\)\}\$\{extname\(specifier\) \? "" : "\\.js"\}` `` (`**/src/resolvers.ts`), 9 results
+
+Searched for regex `export function relativePath\(|return \(k \? "\.\./"\.repeat\(k\) : "\./"\)` (`**/src/path.ts`), 2 results
+
+还差 build 文件里的关键行号，我再抓一下这些精确位置：哈希计算、别名替换、渲染写盘。
+
+Searched for regex ``case "build"|createHash\("sha256"\)\.update\(contents\)\.digest\("hex"\)\.slice\(0, 8\)|const alias = applyHash\(path, hash\)|aliases\.set\(path, alias\)|resolveImport\(specifier\) \{|const html = await renderPage\(page, \{\.\.\.config, path, resolvers\}\);|await effects\.writeFile\(`\$\{path\}\.html`, html\);|function applyHash\(path: string, hash: string\)|class FileBuildEffects|const destination = join\(this\.outputRoot, outputPath\)`` (`**/src/build.ts`), 20 results
+
+Searched for regex `case "build"|await import\("\.\./build\.js"\)\.then\(async \(build\) => build\.build` (`**/src/bin/observable.ts`), 2 results
+
+Searched for regex `if \(path\.startsWith\("/_observablehq/"\) && path\.endsWith\("\.js"\)\)|const clientPath = getClientPath\(|rollupClient\(clientPath, root, path` (`**/src/build.ts`), 4 results
+
+Searched for regex ``relativePath\(path, `/_observablehq/\$\{specifier\.slice\("observablehq:"\.length\)\}\$\{extname\(specifier\) \? "" : "\\.js"\}`\)|resolveImport\(specifier: string\): string`` (`**/src/resolvers.ts`), 2 results
+
+这个 href 不是写死在模板里，而是在 build 过程中通过 解析依赖 + 生成哈希别名 + 渲染 HTML 三步合成出来的。你这个例子最终落在 index.html。
+
+1. build 命令入口调用 build 主流程  
+observable.ts 在 build 子命令里调用 observable.ts 的 build.build(...)。
+
+2. 页面依赖解析时，默认就把 observablehq:client 加进静态导入  
+默认导入列表在 resolvers.ts，其中包含 observablehq:client。  
+构建页面解析器时，globalImports 和 staticImports 都以这个默认列表初始化，见 resolvers.ts 和 resolvers.ts。  
+这一步决定了后面会生成 modulepreload。
+
+3. resolveImport 先把 observablehq:client 解析成 /_observablehq/client.js（相对路径形式）  
+解析函数在 resolvers.ts。  
+对于 observablehq: 前缀，会转换到 /_observablehq/...（并补 .js），再通过 relativePath 变成相对路径。  
+relativePath 在同目录时会强制加 ./，逻辑见 path.ts 和 path.ts。
+
+4. build 阶段先打包 _observablehq 客户端模块  
+处理入口在 build.ts，client 对应源文件定位在 build.ts，然后 rollup 打包见 build.ts。  
+此时还是未加哈希名的逻辑路径 /_observablehq/client.js（物理文件先放缓存）。
+
+5. build 再为全局 JS 计算哈希并生成别名  
+哈希生成与截断（8 位）逻辑在 build.ts。  
+文件名加哈希规则在 build.ts。  
+别名写入 aliases 映射在 build.ts。  
+所以 /_observablehq/client.js 会变成 /_observablehq/client.dfdda2bd.js（你的这个 dfdda2bd 就来自这里的模块哈希）。
+
+6. build 包装 resolvers，把 resolveImport 改成“优先返回哈希别名”  
+包装点在 build.ts。  
+之后只要渲染时调用 resolveImport，就会拿到带哈希的路径。
+
+7. renderPage 渲染 HTML 时写入 modulepreload  
+页面渲染调用在 build.ts。  
+renderHead 会把 staticImports 逐个走 resolveImport 后输出 modulepreload，见 render.ts。  
+具体输出 link 的函数是 render.ts。  
+因为 staticImports 里有 observablehq:client，所以会写出 href="./_observablehq/client.dfdda2bd.js"。  
+同一套 resolveImport 也用于 script import，见 render.ts。
+
+8. 最终写入 dist/index.html  
+写盘在 build.ts，底层写到 outputRoot + outputPath 的逻辑在 build.ts。  
+所以最终你看到的是 index.html。
+
+一句话总结：  
+observablehq:client -> 解析成逻辑路径 /_observablehq/client.js -> build 计算模块哈希并生成别名 /_observablehq/client.dfdda2bd.js -> renderPage 用被包装过的 resolveImport 输出到 modulepreload href。
+
+###
+2.href="./_npm/mermaid@11.15.0/dist/mermaid.esm.min.mjs.5a21ec55.js"
+这个文件路径，是如何从编译（build）开始，一步一步写到index.html这个文件中的
+
+我接着沿同一条链路专门追踪这个 npm mermaid 文件：先确认它是如何被解析到 `/_npm/...`，再确认哈希 `5a21ec55` 在哪一步生成，最后确认是通过哪段 `renderPage` 逻辑写进 `index.html`。我先抓取 `libraries.ts`、resolvers.ts、npm.ts、build.ts 的关键行号。
+
+Searched for regex `mermaid|getImplicitInputImports|getImplicitDependencies|implicit` (`**/src/libraries.ts`), 146 results
+
+Searched for regex `resolveNpmImport|resolveNpmImports|populateNpmCache|extractNpmSpecifier` (`**/src/{resolvers.ts,npm.ts,build.ts}`), 38 results
+
+Searched for regex `getModuleHash\(|applyHash\(path, hash\)|aliases\.set\(path, alias\)|rewriteNpmImports\(|resolveImport\(specifier\).*aliases|getModuleStaticImports` (`**/src/{build.ts,resolvers.ts,render.ts,javascript/module.ts}`), 16 results
+
+我已经确认了“隐式引入 mermaid”的触发点。下一步我会读取 npm 解析与哈希生成的源码片段，再补上 stdlib/mermaid 这一跳，确保链路完整到 `./_npm/mermaid@...5a21ec55.js`。
+
+Searched for regex `stdlib/mermaid|@observablehq/mermaid|from \"mermaid\"|npm:mermaid` (`**/src/**`), 6 results
+
+Read [](file:///d%3A/github/observablehq_framework/src/libraries.ts#16-16), lines 16 to 190
+
+Read [](file:///d%3A/github/observablehq_framework/src/npm.ts#380-380), lines 380 to 516
+
+Read [](file:///d%3A/github/observablehq_framework/src/client/stdlib/mermaid.js)
+
+我已经定位到关键细节：这个文件名里的 `.mjs.5a21ec55.js` 是 `._esm.js` 经过去 `_esm` 再插入 hash 形成的。接下来我补两处证据：npm 版本号 `11.15.0` 的来源和 `resolveImport` 在渲染时如何拿到这个别名。
+
+Searched for regex `resolveNpmVersion\(|parseNpmSpecifier\(|name === "mermaid"|dist/mermaid\.esm\.min\.mjs/\+esm` (`**/src/npm.ts`), 12 results
+
+Read [](file:///d%3A/github/observablehq_framework/src/npm.ts#516-516), lines 516 to 516
+
+Read [](file:///d%3A/github/observablehq_framework/src/build.ts#548-548), lines 548 to 578
+
+Read [](file:///d%3A/github/observablehq_framework/src/npm.ts#1-1), lines 1 to 470
+
+Read [](file:///d%3A/github/observablehq_framework/examples/hotel-bookings/src/index.md)
+
+Searched for regex `getImplicitInputImports\(|findFreeInputs\(|staticImports\.add\(i\);\s*globalImports\.add\(i\);` (`**/src/resolvers.ts`), 3 results
+
+Searched for regex `npm:@observablehq/mermaid|/_observablehq/stdlib/mermaid\.js|const builtins = new Map` (`**/src/resolvers.ts`), 3 results
+
+Searched for regex `getImplicitDependencies\(staticImports\)|getImplicitDependencies\(globalImports\)` (`**/src/resolvers.ts`), 2 results
+
+我再取一个“直接证据”：输出目录里的 `stdlib/mermaid` 文件里，是否已经把 `npm:mermaid` 改写成 `../_npm/mermaid@11.15.0/...5a21ec55.js`。这能把链路最后一跳完全闭环。
+
+Searched for regex `dist/_observablehq/stdlib/mermaid|dist/_npm/mermaid@11.15.0|modulepreload" href="\./_npm/mermaid@11.15.0/dist/mermaid\.esm\.min\.mjs\.5a21ec55\.js` (`**/examples/hotel-bookings/dist/**`), 1 result
+
+Read [](file:///d%3A/github/observablehq_framework/examples/hotel-bookings/dist/_observablehq/stdlib/mermaid.d6ecb376.js)
+
+这个路径的生成链路，和 client 那条类似，但多了 npm 解析与重写这两步。按 build 时序看是这样：
+
+1. 入口进入 build  
+命令入口在 observable.ts 和 observable.ts，会调用 build 主流程。
+
+2. 页面里出现 mermaid，触发隐式库导入  
+你这个页面是 mermaid 代码块，见 index.md。  
+在依赖解析阶段，free input 会走 getImplicitInputImports，调用点在 resolvers.ts，规则在 libraries.ts：  
+mermaid -> npm:@observablehq/mermaid。
+
+3. npm:@observablehq/mermaid 先映射到 framework 的 stdlib 模块  
+内置映射在 resolvers.ts：  
+npm:@observablehq/mermaid -> /_observablehq/stdlib/mermaid.js。
+
+4. stdlib/mermaid 模块内部再 import npm:mermaid  
+源码在 mermaid.js。  
+同时依赖补全规则也会把 npm:@observablehq/mermaid 补成 npm:mermaid，见 libraries.ts，调用点在 resolvers.ts 与 resolvers.ts。
+
+5. npm:mermaid 被解析成带版本的 /_npm 路径  
+resolveNpmImport 在 npm.ts。  
+这里对 mermaid 有特殊 path：dist/mermaid.esm.min.mjs/+esm，见 npm.ts。  
+版本号通过 resolveNpmVersion 解析，见 npm.ts 和调用 npm.ts。  
+所以会得到类似：/_npm/mermaid@11.15.0/dist/mermaid.esm.min.mjs._esm.js（中间产物）。
+
+6. npm 包被下载到 cache，并重写内部 import  
+下载与缓存在 npm.ts。  
+JS 内容重写在 npm.ts（rewriteNpmImports）。
+
+7. build 给所有全局 JS（含 /_npm/mermaid...）算模块哈希并生成别名  
+这一步在 build.ts 到 build.ts。  
+重命名规则在 build.ts。  
+关键细节：对 .js 会去掉文件名尾部的 ._esm，再插入 hash，见 build.ts。  
+于是：  
+mermaid.esm.min.mjs._esm.js -> mermaid.esm.min.mjs.5a21ec55.js。
+
+8. build 包装 resolveImport，让渲染阶段拿到哈希别名  
+包装点在 build.ts。  
+之后 render 时 resolveImport 会优先返回 aliases 里的 hashed 路径。
+
+9. renderPage 把 staticImports 输出为 modulepreload，写入 index.html  
+modulepreload 生成在 render.ts 和 render.ts。  
+相对路径带 ./ 来自 relativePath 逻辑，见 path.ts。  
+最终落盘就是你看到的这行：  
+index.html。
+
+直接证据也能对上：  
+输出后的 stdlib mermaid 文件已经 import 了 hashed npm 文件，见 mermaid.d6ecb376.js。
+
+###
+3.import {fromArrayBuffer} from "npm:geotiff";和
+import {fromArrayBuffer} from "geotiff";
+在处理引用上用什么不同
+我先快速对照源码把这两种 import 的分支差异定位到精确代码位置，然后给你一个按构建阶段拆开的对比结论。先读 resolver 里 npm 前缀和 bare import 的判断分支，目标是明确两者最终都会不会走 npm 解析器，以及路径与版本锁定在哪一步发生。
+
+Searched for regex `specifier\.startsWith\("npm:"\)|!/\^\\w\+:/\.test\(specifier\)|resolveNodeImport\(|resolveNpmImport\(` (`**/src/resolvers.ts`), 12 results
+
+Read [](file:///d%3A/github/observablehq_framework/src/resolvers.ts#500-500), lines 500 to 710
+
+Searched for regex `resolveNodeImport\(|fromNodePath|extractNodeSpecifier` (`**/src/node.ts`), 2 results
+
+Read [](file:///d%3A/github/observablehq_framework/src/node.ts#1-1), lines 1 to 120
+
+我已经确认核心分支：npm: 前缀直接走 npm 解析器，bare 包名走 node 解析器。再补一段 node bundling 里的导入重写细节，这样可以准确回答 geotiff 两种写法在产物路径和依赖处理上的区别。
+
+Read [](file:///d%3A/github/observablehq_framework/src/node.ts#120-120), lines 120 to 217
+
+这两种写法在这个项目里会走两条不同的解析管线，核心区别是 走 CDN 的 npm 管线 还是 走本地 node_modules 管线。
+
+1. 入口分支不同  
+import {fromArrayBuffer} from "npm:geotiff";  
+会命中 npm 分支，见 resolvers.ts 和 resolvers.ts。  
+import {fromArrayBuffer} from "geotiff";  
+会命中 bare import 分支，见 resolvers.ts 和 resolvers.ts。
+
+2. 版本来源不同  
+npm:geotiff 由 npm registry 在线解析版本，没写版本时会走 latest 或 semver 匹配，见 npm.ts。  
+geotiff 由本地安装包决定版本，通过 require.resolve 和本地 package.json 获取，见 node.ts 到 node.ts。
+
+3. 产物目录不同  
+npm:geotiff 最终落到 /_npm/...，路径生成逻辑在 npm.ts。  
+geotiff 最终落到 /_node/...，路径生成逻辑在 node.ts 和 node.ts。
+
+4. 依赖处理方式不同  
+npm:geotiff 会从 jsDelivr 下载源码，解析 package.json 依赖并重写 /npm/ 引用，见 npm.ts 和 npm.ts。  
+geotiff 会用 rollup 对本地包做打包与转换，再把内部 bare import 继续解析成 /_node/，见 node.ts 和 node.ts。
+
+5. 实际使用上的差别  
+npm: 前缀不依赖你本地是否安装 geotiff。  
+bare 写法依赖本地 node_modules 必须可解析，否则会在 resolve 阶段失败。  
+
+结论：语法只差一个 npm: 前缀，但在构建系统里是两条不同供应链。前者是 远程 npm 缓存链，后者是 本地 node_modules 打包链。
+
+###
+4.href="./_npm/d3-dsv@3.0.1/9cffc2bd.js"这个文件路径，是如何从编译（build）开始，一步一步写到index.html这个文件中的
+
+我会按这条 d3-dsv 路径专门还原完整链路：先定位它在依赖解析里是怎么被引入（通常是 `.csv()` 触发隐式导入），再定位哈希别名 `9cffc2bd` 的生成点，最后定位写入 index.html 的渲染调用。先抓一组精确行号证据。
+
+Searched for regex `d3-dsv|csv\)|getImplicitFileImports|fileMethods|FileAttachment` (`**/src/{libraries.ts,resolvers.ts,javascript/transpile.ts}`), 28 results
+
+Searched for regex `` createHash\("sha256"\)|getModuleHash\(cacheRoot, path\)|applyHash\(path, hash\)|aliases\.set\(path, alias\)|renderPage\(|writeFile\(`\$\{path\}\.html` `` (`**/src/build.ts`), 15 results
+
+Searched for regex `staticImports.*resolveImport|renderModulePreload|resolveImport\("observablehq:client"\)` (`**/src/render.ts`), 5 results
+
+我已经拿到“csv/tsv -> npm:d3-dsv”的入口证据。现在再补两段：一是 `resolveNpmImport("d3-dsv")` 如何得到 `/_npm/d3-dsv@3.0.1/_esm.js`，二是最终 dist 里该文件实际名为什么是 `9cffc2bd.js`。
+
+Searched for regex ``resolveNpmImport\(|return `/_npm/\$\{name\}@\$\{version\}/|path === "\+esm" \? "_esm\.js"|path\.replace`` (`**/src/npm.ts`), 10 results
+
+Read [](file:///d%3A/github/observablehq_framework/src/build.ts#330-330), lines 330 to 380
+
+Read [](file:///d%3A/github/observablehq_framework/src/build.ts#560-560), lines 560 to 575
+
+我再补两处关键证据让链路更“闭环”：`fileMethods` 如何把 `npm:d3-dsv` 同时放进 `staticImports/globalImports`，以及 `google-analytics` 源页里 `.csv()` 的触发点。
+
+Read [](file:///d%3A/github/observablehq_framework/src/resolvers.ts#170-170), lines 170 to 360
+
+Searched for files matching `**/examples/google-analytics/src/**`, 14 matches
+
+Searched for regex `FileAttachment\(.*\)\.csv|\.csv\(\{typed: true\}\)|from "npm:d3-dsv"|d3-dsv` (`**/examples/google-analytics/src/**`), 14 results
+
+Searched for regex `function applyHash\(path: string, hash: string\)|name = name\.replace\(/\(\^\|\\\.\)_esm\$/, ""\)|return join\(dirname\(path\),` (`**/src/build.ts`), 3 results
+
+Searched for regex `export function relativePath\(|return \(k \? "\.\./"\.repeat\(k\) : "\./"\)` (`**/src/path.ts`), 2 results
+
+Searched for regex `for \(const i of getImplicitFileImports\(fileMethods\)\)|staticImports\.add\(i\);|globalImports\.add\(i\);` (`**/src/resolvers.ts`), 11 results
+
+Searched for regex `resolutions\.set\(i, await resolveNpmImport\(root, i\.slice\("npm:"\.length\)\)\)|function resolveImport\(specifier: string\)|resolutions\.has\(specifier\)` (`**/src/resolvers.ts`), 4 results
+
+Searched for regex `resolveImport\(specifier\) \{ //suchao|const a = aliases\.get\(resolvePath\(path, r\)\);` (`**/src/build.ts`), 5 results
+
+Searched for regex `Array\.from\(new Set\(Array\.from\(staticImports, resolveImport\)\), renderModulePreload\)|function renderModulePreload` (`**/src/render.ts`), 2 results
+
+Searched for files matching `**/examples/google-analytics/dist/_npm/d3-dsv@3.0.1/*`, no matches
+
+Searched for regex `href="\./_npm/d3-dsv@3\.0\.1/9cffc2bd\.js"` (`**/examples/google-analytics/dist/index.html`), 1 result
+
+Searched for files matching `**/examples/google-analytics/src/.observablehq/cache/_npm/d3-dsv@3.0.1/*`, no matches
+
+Read [](file:///d%3A/github/observablehq_framework/examples/google-analytics/dist/_npm)
+
+Read [](file:///d%3A/github/observablehq_framework/examples/google-analytics/dist/_npm/d3-dsv%403.0.1)
+
+Read [](file:///d%3A/github/observablehq_framework/examples/google-analytics/src/.observablehq/cache/_npm/d3-dsv%403.0.1)
+
+这条路径是这样从 build 一步步落到 index.html 的（以你选中的 d3-dsv 为例）：
+
+1. 页面源码里调用了 FileAttachment(...).csv(...)  
+在 index.md、index.md、index.md。
+
+2. 依赖扫描时记录到 fileMethods = csv  
+解析逻辑在 resolvers.ts 到 resolvers.ts。
+
+3. csv 方法触发隐式库导入 npm:d3-dsv  
+规则定义在 libraries.ts。  
+应用规则时把它加入 staticImports 和 globalImports，见 resolvers.ts、resolvers.ts、resolvers.ts。
+
+4. npm:d3-dsv 被解析成具体版本路径  
+解析发生在 resolvers.ts。  
+路径生成逻辑在 npm.ts 和 npm.ts。  
+对 d3-dsv 这种 +esm 入口会先得到 /_npm/d3-dsv@3.0.1/_esm.js（规则见 npm.ts）。
+
+5. build 阶段为全局 js 模块算哈希并建立别名  
+哈希计算在 build.ts。  
+别名生成在 build.ts 和 build.ts。
+
+6. 为什么文件名是 9cffc2bd.js（只有 hash）  
+因为 applyHash 会把 js 名称里的 _esm 去掉：见 build.ts、build.ts、build.ts。  
+所以 /_npm/d3-dsv@3.0.1/_esm.js -> /_npm/d3-dsv@3.0.1/9cffc2bd.js。
+
+7. 渲染 HTML 时，staticImports 通过 resolveImport 输出 modulepreload  
+渲染点在 render.ts 和 render.ts。  
+build 在渲染前把 resolveImport 包装成“优先返回哈希别名”，见 build.ts 和 build.ts。
+
+8. 最终写入 dist/index.html  
+写盘在 build.ts 和 build.ts。  
+你看到的结果在 index.html。  
+对应产物文件也确实存在于 d3-dsv@3.0.1。  
+同时缓存中的原始 npm 入口文件是 _esm.js。
+
+如果你愿意，我可以继续把这条链再画成一张“变量值流转表”（每一步的 specifier/path/hash 实际值）。
